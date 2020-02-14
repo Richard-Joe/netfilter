@@ -58,6 +58,8 @@
 
 #include "nf_internals.h"
 
+unsigned char dbg_cpus[NR_CPUS];
+
 __cacheline_aligned_in_smp spinlock_t nf_conntrack_locks[CONNTRACK_LOCKS];
 EXPORT_SYMBOL_GPL(nf_conntrack_locks);
 
@@ -1144,6 +1146,9 @@ __nf_conntrack_alloc(struct net *net,
 	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *repl;
 	/* save hash for reusing when confirming */
 	*(unsigned long *)(&ct->tuplehash[IP_CT_DIR_REPLY].hnnode.pprev) = hash;
+    dbg("orig tuple hash = %p, reply tuple hash = %p\n", 
+        &ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple,
+        &ct->tuplehash[IP_CT_DIR_REPLY].tuple);
 	ct->status = 0;
 	write_pnet(&ct->ct_net, net);
 	memset(&ct->__nfct_init_offset[0], 0,
@@ -1227,6 +1232,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	}
 
 	timeout_ext = tmpl ? nf_ct_timeout_find(tmpl) : NULL;
+    dbg("timeout_ext = %p\n", timeout_ext);
 	if (timeout_ext) {
 		timeouts = nf_ct_timeout_data(timeout_ext);
 		if (unlikely(!timeouts))
@@ -1234,6 +1240,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	} else {
 		timeouts = l4proto->get_timeouts(net);
 	}
+    dbg("timeouts = %u\n", *timeouts);
 
 	if (!l4proto->new(ct, skb, dataoff, timeouts)) {
 		nf_conntrack_free(ct);
@@ -1328,7 +1335,10 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 	/* look for tuple match */
 	zone = nf_ct_zone_tmpl(tmpl, skb, &tmp);
 	hash = hash_conntrack_raw(&tuple, net);
+    dbg("src=%pI4 dst=%pI4 proto=%u hash = %u\n",
+        &tuple.src.u3.ip, &tuple.dst.u3.ip, tuple.dst.protonum, hash);
 	h = __nf_conntrack_find_get(net, zone, &tuple, hash);
+    dbg("find tuple_hash = %p\n", h);
 	if (!h) {
 		h = init_conntrack(net, tmpl, &tuple, l3proto, l4proto,
 				   skb, dataoff, hash);
@@ -1340,6 +1350,7 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 	ct = nf_ct_tuplehash_to_ctrack(h);
 
 	/* It exists; we have (non-exclusive) reference. */
+    dbg("direction = %u\n", NF_CT_DIRECTION(h));
 	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY) {
 		ctinfo = IP_CT_ESTABLISHED_REPLY;
 	} else {
@@ -1373,6 +1384,9 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 	int ret;
 
     struct iphdr *iph = ip_hdr(skb);
+    dbg_cpus[smp_processor_id()] = 0;
+    if (iph->saddr == 0x0A0A0A0A || iph->daddr == 0x0A0A0A0A)
+        dbg_cpus[smp_processor_id()] = 1;
     dbg("[%pI4-%pI4 : %u]\n", &iph->saddr, &iph->daddr, iph->protocol);
 
 	tmpl = nf_ct_get(skb, &ctinfo);
@@ -1391,8 +1405,9 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 	/* rcu_read_lock()ed by nf_hook_thresh */
     dbg("pf = %u\n", pf);
 	l3proto = __nf_ct_l3proto_find(pf);
-    dbg("l3proto = %p, nf_conntrack_l3proto_generic = %p\n",
-        l3proto, &nf_conntrack_l3proto_generic);
+    /* 如果协议族是IPV4，
+     * l3proto指向nf_conntrack_l3proto_ipv4，
+     * 这里调用的是ipv4_get_l4proto */
 	ret = l3proto->get_l4proto(skb, skb_network_offset(skb),
 				   &dataoff, &protonum);
 	if (ret <= 0) {
@@ -1403,6 +1418,8 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 		goto out;
 	}
 
+    /* 如果协议族是IPV4，根据三层协议类型
+     * l4proto指向builtin_l4proto4中一个 */
 	l4proto = __nf_ct_l4proto_find(pf, protonum);
 
 	/* It may be an special packet, error, unclean...
@@ -1431,6 +1448,7 @@ repeat:
 	}
 
 	ct = nf_ct_get(skb, &ctinfo);
+    dbg("nf_conn = %p\n", ct);
 	if (!ct) {
 		/* Not valid part of a connection */
 		NF_CT_STAT_INC_ATOMIC(net, invalid);
@@ -1440,6 +1458,7 @@ repeat:
 
 	/* Decide what timeout policy we want to apply to this flow. */
 	timeouts = nf_ct_timeout_lookup(net, ct, l4proto);
+    dbg("timeouts = %u\n", *timeouts);
 
 	ret = l4proto->packet(ct, skb, dataoff, ctinfo, timeouts);
 	if (ret <= 0) {
@@ -2137,7 +2156,7 @@ int nf_conntrack_init_start(void)
 		return -ENOMEM;
 
 	nf_conntrack_max = max_factor * nf_conntrack_htable_size;
-    dbg("totalram_pages = %lu, nf_conntrack_htable_size = %u, nf_conntrack_max = %u\n",
+    dbg0("totalram_pages = %lu, nf_conntrack_htable_size = %u, nf_conntrack_max = %u\n",
         totalram_pages, nf_conntrack_htable_size, nf_conntrack_max);
 
 	nf_conntrack_cachep = kmem_cache_create("nf_conntrack",
