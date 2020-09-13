@@ -58,8 +58,6 @@
 
 #include "nf_internals.h"
 
-unsigned char dbg_cpus[NR_CPUS];
-
 __cacheline_aligned_in_smp spinlock_t nf_conntrack_locks[CONNTRACK_LOCKS];
 EXPORT_SYMBOL_GPL(nf_conntrack_locks);
 
@@ -1146,7 +1144,7 @@ __nf_conntrack_alloc(struct net *net,
 	ct->tuplehash[IP_CT_DIR_REPLY].tuple = *repl;
 	/* save hash for reusing when confirming */
 	*(unsigned long *)(&ct->tuplehash[IP_CT_DIR_REPLY].hnnode.pprev) = hash;
-    dbg("orig tuple hash = %p, reply tuple hash = %p\n", 
+    x_debug("orig tuple hash = %p, reply tuple hash = %p\n", 
         &ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple,
         &ct->tuplehash[IP_CT_DIR_REPLY].tuple);
 	ct->status = 0;
@@ -1232,7 +1230,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	}
 
 	timeout_ext = tmpl ? nf_ct_timeout_find(tmpl) : NULL;
-    dbg("timeout_ext = %p\n", timeout_ext);
+    x_debug("timeout_ext = %p\n", timeout_ext);
 	if (timeout_ext) {
 		timeouts = nf_ct_timeout_data(timeout_ext);
 		if (unlikely(!timeouts))
@@ -1240,7 +1238,7 @@ init_conntrack(struct net *net, struct nf_conn *tmpl,
 	} else {
 		timeouts = l4proto->get_timeouts(net);
 	}
-    dbg("timeouts = %u\n", *timeouts);
+    x_debug("timeouts = %u\n", *timeouts);
 
 	if (!l4proto->new(ct, skb, dataoff, timeouts)) {
 		nf_conntrack_free(ct);
@@ -1335,10 +1333,10 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 	/* look for tuple match */
 	zone = nf_ct_zone_tmpl(tmpl, skb, &tmp);
 	hash = hash_conntrack_raw(&tuple, net);
-    dbg("src=%pI4 dst=%pI4 proto=%u hash = %u\n",
+    x_debug("src=%pI4 dst=%pI4 proto=%u hash = %u\n",
         &tuple.src.u3.ip, &tuple.dst.u3.ip, tuple.dst.protonum, hash);
 	h = __nf_conntrack_find_get(net, zone, &tuple, hash);
-    dbg("find tuple_hash = %p\n", h);
+    x_debug("find tuple_hash = %p\n", h);
 	if (!h) {
 		h = init_conntrack(net, tmpl, &tuple, l3proto, l4proto,
 				   skb, dataoff, hash);
@@ -1350,7 +1348,7 @@ resolve_normal_ct(struct net *net, struct nf_conn *tmpl,
 	ct = nf_ct_tuplehash_to_ctrack(h);
 
 	/* It exists; we have (non-exclusive) reference. */
-    dbg("direction = %u\n", NF_CT_DIRECTION(h));
+    x_debug("direction = %u\n", NF_CT_DIRECTION(h));
 	if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY) {
 		ctinfo = IP_CT_ESTABLISHED_REPLY;
 	} else {
@@ -1384,26 +1382,23 @@ nf_conntrack_in(struct net *net, u_int8_t pf, unsigned int hooknum,
 	int ret;
 
     struct iphdr *iph = ip_hdr(skb);
-    dbg_cpus[smp_processor_id()] = 0;
-    if (iph->saddr == 0x0A0A0A0A || iph->daddr == 0x0A0A0A0A)
-        dbg_cpus[smp_processor_id()] = 1;
-    dbg("[%pI4-%pI4 : %u]\n", &iph->saddr, &iph->daddr, iph->protocol);
+    x_debug("[%pI4-%pI4 : %u]\n", &iph->saddr, &iph->daddr, iph->protocol);
 
 	tmpl = nf_ct_get(skb, &ctinfo);
-    dbg("tmpl = %p, ip_conntrack_info = %u\n", tmpl, ctinfo);
+    x_debug("tmpl = %p, ip_conntrack_info = %u\n", tmpl, ctinfo);
 	if (tmpl || ctinfo == IP_CT_UNTRACKED) {
 		/* Previously seen (loopback or untracked)?  Ignore. */
 		if ((tmpl && !nf_ct_is_template(tmpl)) ||
 		     ctinfo == IP_CT_UNTRACKED) {
 			NF_CT_STAT_INC_ATOMIC(net, ignore);
-            dbg("untracked, ignore\n");
+            x_debug("untracked, ignore\n");
 			return NF_ACCEPT;
 		}
 		skb->_nfct = 0;
 	}
 
 	/* rcu_read_lock()ed by nf_hook_thresh */
-    dbg("pf = %u\n", pf);
+    x_debug("pf = %u\n", pf);
 	l3proto = __nf_ct_l3proto_find(pf);
     /* 如果协议族是IPV4，
      * l3proto指向nf_conntrack_l3proto_ipv4，
@@ -1448,7 +1443,7 @@ repeat:
 	}
 
 	ct = nf_ct_get(skb, &ctinfo);
-    dbg("nf_conn = %p\n", ct);
+    x_debug("nf_conn = %p\n", ct);
 	if (!ct) {
 		/* Not valid part of a connection */
 		NF_CT_STAT_INC_ATOMIC(net, invalid);
@@ -1458,7 +1453,7 @@ repeat:
 
 	/* Decide what timeout policy we want to apply to this flow. */
 	timeouts = nf_ct_timeout_lookup(net, ct, l4proto);
-    dbg("timeouts = %u\n", *timeouts);
+    x_debug("timeouts = %u\n", *timeouts);
 
 	ret = l4proto->packet(ct, skb, dataoff, ctinfo, timeouts);
 	if (ret <= 0) {
@@ -2156,7 +2151,7 @@ int nf_conntrack_init_start(void)
 		return -ENOMEM;
 
 	nf_conntrack_max = max_factor * nf_conntrack_htable_size;
-    dbg0("totalram_pages = %lu, nf_conntrack_htable_size = %u, nf_conntrack_max = %u\n",
+    x_debug("totalram_pages = %lu, nf_conntrack_htable_size = %u, nf_conntrack_max = %u\n",
         totalram_pages, nf_conntrack_htable_size, nf_conntrack_max);
 
 	nf_conntrack_cachep = kmem_cache_create("nf_conntrack",

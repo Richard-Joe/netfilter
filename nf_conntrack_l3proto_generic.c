@@ -53,7 +53,6 @@ static int generic_get_l4proto(const struct sk_buff *skb, unsigned int nhoff,
 			       unsigned int *dataoff, u_int8_t *protonum)
 {
 	/* Never track !!! */
-    dbg("get_l4proto: never track. return -1\n");
 	return -NF_ACCEPT;
 }
 
